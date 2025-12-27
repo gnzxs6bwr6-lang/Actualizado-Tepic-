@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Tepic Resurgence - Warzone Core</title>
+<style>
+html,body{margin:0;padding:0;overflow:hidden;background:#000;font-family:Arial}
+#hud{position:fixed;top:10px;left:10px;color:#fff;z-index:10}
+.bar{width:200px;height:14px;background:#222;margin-bottom:5px;border:1px solid #555}
+.fill{height:100%}
+#health{background:red}
+#armor{background:#3fa9f5}
+#stamina{background:#00ff88}
+.info{margin-top:5px;font-size:14px}
+.notification{
+ position:fixed;top:40%;left:50%;transform:translateX(-50%);
+ background:rgba(0,0,0,.8);padding:15px 25px;
+ border:2px solid #0f8;color:#0f8;font-weight:bold
+}
+</style>
+</head>
+<body>
+
+<div id="hud">
+ VIDA
+ <div class="bar"><div id="health" class="fill"></div></div>
+ ARMADURA
+ <div class="bar"><div id="armor" class="fill"></div></div>
+ STAMINA
+ <div class="bar"><div id="stamina" class="fill"></div></div>
+ <div class="info" id="info"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+/* =============================
+   JUEGO BASE
+============================= */
+const Game={
+ scene:null,camera:null,renderer:null,clock:null,running:true,
+ input:{keys:{},mouse:false},
+ objects:[],bots:[],projectiles:[],
+ player:{
+  health:100,maxHealth:100,
+  armor:0,maxArmor:150,armorPlates:3,
+  stamina:100,maxStamina:100,
+  position:new THREE.Vector3(0,1.7,0),
+  rotation:new THREE.Euler(0,0,0,'YXZ'),
+  speed:6,money:500,kills:0,
+  alive:true
+ }
+};
+
+/* =============================
+   ESCENA
+============================= */
+Game.scene=new THREE.Scene();
+Game.scene.background=new THREE.Color(0x87ceeb);
+
+Game.camera=new THREE.PerspectiveCamera(75,innerWidth/innerHeight,0.1,500);
+Game.camera.position.copy(Game.player.position);
+
+Game.renderer=new THREE.WebGLRenderer({antialias:true});
+Game.renderer.setSize(innerWidth,innerHeight);
+document.body.appendChild(Game.renderer.domElement);
+
+Game.scene.add(new THREE.AmbientLight(0xffffff,.6));
+let sun=new THREE.DirectionalLight(0xffffff,.8);
+sun.position.set(50,100,50);
+Game.scene.add(sun);
+
+/* =============================
+   MAPA
+============================= */
+let ground=new THREE.Mesh(
+ new THREE.PlaneGeometry(300,300),
+ new THREE.MeshStandardMaterial({color:0x4a6741})
+);
+ground.rotation.x=-Math.PI/2;
+Game.scene.add(ground);
+
+for(let i=0;i<12;i++){
+ let b=new THREE.Mesh(
+  new THREE.BoxGeometry(8,6,8),
+  new THREE.MeshStandardMaterial({color:0xccaa88})
+ );
+ b.position.set((Math.random()-0.5)*120,3,(Math.random()-0.5)*120);
+ Game.scene.add(b);
+ Game.objects.push(b);
+}
+
+/* =============================
+   BOTS
+============================= */
+function spawnBots(n){
+ for(let i=0;i<n;i++){
+  let m=new THREE.Mesh(
+   new THREE.BoxGeometry(.6,1.8,.6),
+   new THREE.MeshStandardMaterial({color:0xff4444})
+  );
+  m.position.set((Math.random()-0.5)*80,.9,(Math.random()-0.5)*80);
+  Game.scene.add(m);
+  Game.bots.push({mesh:m,health:100,lastHit:0});
+ }
+}
+spawnBots(10);
+
+/* =============================
+   CONTROLES
+============================= */
+document.addEventListener('keydown',e=>{
+ Game.input.keys[e.key.toLowerCase()]=true;
+ if(e.key==='4') usePlate();
+});
+document.addEventListener('keyup',e=>Game.input.keys[e.key.toLowerCase()]=false);
+document.addEventListener('mousedown',()=>Game.input.mouse=true);
+document.addEventListener('mouseup',()=>Game.input.mouse=false);
+document.addEventListener('mousemove',e=>{
+ if(!document.pointerLockElement)return;
+ Game.player.rotation.y-=e.movementX*0.002;
+ Game.player.rotation.x-=e.movementY*0.002;
+ Game.player.rotation.x=Math.max(-Math.PI/2,Math.min(Math.PI/2,Game.player.rotation.x));
+});
+document.body.onclick=()=>document.body.requestPointerLock();
+
+/* =============================
+   DAÑO
+============================= */
+function damagePlayer(d){
+ if(!Game.player.alive)return;
+ if(Game.player.armor>0){
+  let a=Math.min(d,Game.player.armor);
+  Game.player.armor-=a; d-=a;
+ }
+ Game.player.health-=d;
+ if(Game.player.health<=0){
+  Game.player.health=0;
+  Game.player.alive=false;
+  Game.running=false;
+  notify("ELIMINADO");
+ }
+}
+
+/* =============================
+   PLACAS
+============================= */
+function usePlate(){
+ if(Game.player.armorPlates<=0||Game.player.armor>=Game.player.maxArmor)return;
+ Game.player.armorPlates--;
+ notify("Colocando placa...");
+ setTimeout(()=>{
+  Game.player.armor=Math.min(Game.player.armor+50,Game.player.maxArmor);
+ },1200);
+}
+
+/* =============================
+   DISPARO
+============================= */
+function fire(){
+ let ray=new THREE.Raycaster();
+ let dir=new THREE.Vector3(0,0,-1).applyEuler(Game.player.rotation);
+ ray.set(Game.camera.position,dir);
+ let hits=ray.intersectObjects(Game.bots.map(b=>b.mesh));
+ if(hits[0]){
+  let bot=Game.bots.find(b=>b.mesh===hits[0].object);
+  bot.health-=30;
+  if(bot.health<=0) killBot(bot);
+ }
+}
+
+/* =============================
+   GRANADAS
+============================= */
+function throwGrenade(){
+ let m=new THREE.Mesh(
+  new THREE.SphereGeometry(.15),
+  new THREE.MeshStandardMaterial({color:0x333})
+ );
+ m.position.copy(Game.camera.position);
+ let v=new THREE.Vector3(0,5,-15).applyEuler(Game.player.rotation);
+ Game.projectiles.push({mesh:m,vel:v,time:Date.now()});
+ Game.scene.add(m);
+}
+
+/* =============================
+   MUERTES
+============================= */
+function killBot(bot){
+ Game.scene.remove(bot.mesh);
+ Game.bots=Game.bots.filter(b=>b!==bot);
+ Game.player.kills++;
+ Game.player.money+=100;
+ if(Game.bots.length===0){
+  Game.running=false;
+  notify("VICTORIA");
+ }
+}
+
+/* =============================
+   GAS
+============================= */
+let Gas={radius:100,shrink:.6};
+let gasMesh=new THREE.Mesh(
+ new THREE.RingGeometry(99,100,64),
+ new THREE.MeshBasicMaterial({color:0x00ff00,transparent:true,opacity:.25,side:THREE.DoubleSide})
+);
+gasMesh.rotation.x=-Math.PI/2;
+Game.scene.add(gasMesh);
+
+/* =============================
+   LOOP
+============================= */
+Game.clock=new THREE.Clock();
+function animate(){
+ if(!Game.running)return;
+ requestAnimationFrame(animate);
+ let dt=Game.clock.getDelta();
+
+ // movimiento
+ let f=new THREE.Vector3(0,0,-1).applyEuler(Game.player.rotation).setY(0).normalize();
+ let r=new THREE.Vector3(1,0,0).applyEuler(new THREE.Euler(0,Game.player.rotation.y,0));
+ let speed=Game.player.speed;
+
+ if(Game.input.keys['shift']&&Game.player.stamina>0){
+  speed*=1.8;
+  Game.player.stamina-=40*dt;
+ }else Game.player.stamina+=25*dt;
+
+ Game.player.stamina=THREE.MathUtils.clamp(Game.player.stamina,0,100);
+
+ if(Game.input.keys.w)Game.player.position.add(f.clone().multiplyScalar(speed*dt));
+ if(Game.input.keys.s)Game.player.position.add(f.clone().multiplyScalar(-speed*dt));
+ if(Game.input.keys.a)Game.player.position.add(r.clone().multiplyScalar(-speed*dt));
+ if(Game.input.keys.d)Game.player.position.add(r.clone().multiplyScalar(speed*dt));
+
+ Game.camera.position.copy(Game.player.position);
+ Game.camera.rotation.copy(Game.player.rotation);
+
+ if(Game.input.mouse)fire();
+
+ // bots
+ Game.bots.forEach(b=>{
+  let d=b.mesh.position.distanceTo(Game.player.position);
+  if(d<30){
+   let dir=new THREE.Vector3().subVectors(Game.player.position,b.mesh.position).normalize();
+   b.mesh.position.add(dir.multiplyScalar(dt*2));
+   if(d<2&&Date.now()-b.lastHit>1000){
+    b.lastHit=Date.now();
+    damagePlayer(8);
+   }
+  }
+ });
+
+ // granadas
+ for(let i=Game.projectiles.length-1;i>=0;i--){
+  let g=Game.projectiles[i];
+  g.vel.y-=9.8*dt;
+  g.mesh.position.add(g.vel.clone().multiplyScalar(dt));
+  if(Date.now()-g.time>2000){
+   Game.bots.forEach(b=>{
+    let d=b.mesh.position.distanceTo(g.mesh.position);
+    if(d<10){b.health-=80*(1-d/10);if(b.health<=0)killBot(b);}
+   });
+   Game.scene.remove(g.mesh);
+   Game.projectiles.splice(i,1);
+  }
+ }
+
+ // gas
+ Gas.radius-=Gas.shrink*dt;
+ if(Game.player.position.length()>Gas.radius) damagePlayer(6*dt);
+ gasMesh.geometry.dispose();
+ gasMesh.geometry=new THREE.RingGeometry(Gas.radius-1,Gas.radius,64);
+
+ // HUD
+ health.style.width=(Game.player.health/100*100)+'%';
+ armor.style.width=(Game.player.armor/150*100)+'%';
+ stamina.style.width=(Game.player.stamina/100*100)+'%';
+ info.innerHTML=`💰 $${Game.player.money} | 🎯 ${Game.player.kills} | 🛡️ Placas ${Game.player.armorPlates}`;
+
+ Game.renderer.render(Game.scene,Game.camera);
+}
+animate();
+
+/* =============================
+   NOTIFICACIONES
+============================= */
+function notify(t){
+ let n=document.createElement('div');
+ n.className='notification';
+ n.textContent=t;
+ document.body.appendChild(n);
+ setTimeout(()=>n.remove(),2500);
+}
+</script>
+</body>
+</html>
