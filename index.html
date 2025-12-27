@@ -2,8 +2,7 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<title>FPS WARZONE CORE</title>
-
+<title>FPS WARZONE CORE - Realista</title>
 <style>
 html,body{margin:0;overflow:hidden;background:#000;font-family:Arial}
 #hud{position:fixed;top:10px;left:10px;color:#fff;z-index:10}
@@ -27,234 +26,20 @@ html,body{margin:0;overflow:hidden;background:#000;font-family:Arial}
 }
 </style>
 </head>
-
 <body>
-
 <div id="hud">
  VIDA<div class="bar"><div id="health" class="fill"></div></div>
  ARMOR<div class="bar"><div id="armor" class="fill"></div></div>
  STAMINA<div class="bar"><div id="stamina" class="fill"></div></div>
  <div id="info"></div>
 </div>
-
 <div id="crosshair"></div>
 
+<!-- Three.js -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r152/three.min.js"></script>
-<script>
-/* ================= GAME ================= */
-const G={
- scene:null,camera:null,renderer:null,clock:null,running:true,
- keys:{},shoot:false,ads:false,
- bots:[],projectiles:[],
- settings:{sens:.0025,fov:75,adsFov:55,gravity:15,jump:6},
- player:{
-  pos:new THREE.Vector3(0,1.7,0),
-  rot:new THREE.Euler(0,0,0,'YXZ'),
-  velY:0,onGround:true,
-  speed:6,stamina:100,
-  health:100,armor:0,plates:3,
-  kills:0,money:500
- }
-};
+<script src="https://cdn.jsdelivr.net/npm/three@0.152.0/examples/js/loaders/GLTFLoader.js"></script>
 
-/* ================= ESCENA ================= */
-G.scene=new THREE.Scene();
-G.scene.background=new THREE.Color(0x9ecae6);
-G.scene.fog=new THREE.Fog(0x9ecae6,40,300);
-
-G.camera=new THREE.PerspectiveCamera(G.settings.fov,innerWidth/innerHeight,.1,500);
-G.camera.position.copy(G.player.pos);
-
-G.renderer=new THREE.WebGLRenderer({antialias:true});
-G.renderer.setSize(innerWidth,innerHeight);
-G.renderer.shadowMap.enabled=true;
-document.body.appendChild(G.renderer.domElement);
-
-G.scene.add(new THREE.AmbientLight(0xffffff,.35));
-const sun=new THREE.DirectionalLight(0xfff2cc,1.2);
-sun.position.set(80,120,40);
-sun.castShadow=true;
-G.scene.add(sun);
-
-/* ================= MAPA ================= */
-const L=new THREE.TextureLoader();
-const grass=L.load("https://threejs.org/examples/textures/terrain/grasslight-big.jpg");
-grass.wrapS=grass.wrapT=THREE.RepeatWrapping;
-grass.repeat.set(40,40);
-
-const ground=new THREE.Mesh(
- new THREE.PlaneGeometry(400,400),
- new THREE.MeshStandardMaterial({map:grass})
-);
-ground.rotation.x=-Math.PI/2;
-ground.receiveShadow=true;
-G.scene.add(ground);
-
-// ciudad
-const wall=L.load("https://threejs.org/examples/textures/brick_diffuse.jpg");
-for(let i=0;i<30;i++){
- let h=5+Math.random()*15;
- let b=new THREE.Mesh(
-  new THREE.BoxGeometry(10,h,10),
-  new THREE.MeshStandardMaterial({map:wall})
- );
- b.position.set(
-  (Math.random()-0.5)*300,
-  h/2,
-  (Math.random()-0.5)*300
- );
- b.castShadow=b.receiveShadow=true;
- G.scene.add(b);
-}
-
-/* ================= BOTS ================= */
-function spawnBots(n){
- for(let i=0;i<n;i++){
-  let m=new THREE.Mesh(
-   new THREE.CapsuleGeometry(.35,1.2,6,12),
-   new THREE.MeshStandardMaterial({color:0xaa2222})
-  );
-  m.position.set((Math.random()-0.5)*200,1,(Math.random()-0.5)*200);
-  m.castShadow=true;
-  G.scene.add(m);
-  G.bots.push({mesh:m,health:100,last:0});
- }
-}
-spawnBots(15);
-
-/* ================= CONTROLES ================= */
-document.addEventListener("keydown",e=>{
- G.keys[e.key.toLowerCase()]=true;
- if(e.key==="4") plate();
- if(e.key==="g") grenade();
-});
-document.addEventListener("keyup",e=>G.keys[e.key.toLowerCase()]=false);
-
-document.addEventListener("mousedown",e=>{
- if(e.button===0) G.shoot=true;
- if(e.button===2) G.ads=true;
-});
-document.addEventListener("mouseup",e=>{
- if(e.button===0) G.shoot=false;
- if(e.button===2) G.ads=false;
-});
-document.addEventListener("contextmenu",e=>e.preventDefault());
-
-document.addEventListener("mousemove",e=>{
- if(!document.pointerLockElement) return;
- G.player.rot.y-=e.movementX*G.settings.sens;
- G.player.rot.x-=e.movementY*G.settings.sens;
- G.player.rot.x=Math.max(-Math.PI/2,Math.min(Math.PI/2,G.player.rot.x));
-});
-document.body.onclick=()=>document.body.requestPointerLock();
-
-/* ================= DISPARO + RETROCESO ================= */
-let lastShot=0;
-function fire(){
- if(performance.now()-lastShot<120) return;
- lastShot=performance.now();
-
- G.player.rot.x+=0.02; // retroceso
-
- let ray=new THREE.Raycaster();
- let dir=new THREE.Vector3(0,0,-1).applyEuler(G.player.rot);
- ray.set(G.camera.position,dir);
- let hit=ray.intersectObjects(G.bots.map(b=>b.mesh))[0];
- if(hit){
-  let bot=G.bots.find(b=>b.mesh===hit.object);
-  bot.health-=35;
-  if(bot.health<=0) kill(bot);
- }
-}
-
-/* ================= GRANADA ================= */
-function grenade(){
- let m=new THREE.Mesh(
-  new THREE.SphereGeometry(.15),
-  new THREE.MeshStandardMaterial({color:0x333})
- );
- m.position.copy(G.camera.position);
- let v=new THREE.Vector3(0,6,-16).applyEuler(G.player.rot);
- G.projectiles.push({mesh:m,vel:v,time:performance.now()});
- G.scene.add(m);
-}
-
-/* ================= PLACA ================= */
-function plate(){
- if(G.player.plates<=0||G.player.armor>=150)return;
- G.player.plates--;
- notify("Placa colocada");
- setTimeout(()=>G.player.armor=Math.min(150,G.player.armor+50),1000);
-}
-
-/* ================= MUERTE BOT ================= */
-function kill(b){
- G.scene.remove(b.mesh);
- G.bots=G.bots.filter(x=>x!==b);
- G.player.kills++;G.player.money+=100;
- if(!G.bots.length){notify("VICTORIA");G.running=false;}
-}
-
-/* ================= LOOP ================= */
-G.clock=new THREE.Clock();
-function loop(){
- if(!G.running) return;
- requestAnimationFrame(loop);
- let dt=G.clock.getDelta();
-
- let f=new THREE.Vector3(0,0,-1).applyEuler(G.player.rot).setY(0).normalize();
- let r=new THREE.Vector3(1,0,0).applyEuler(new THREE.Euler(0,G.player.rot.y,0));
-
- let sp=G.player.speed;
- if(G.keys.shift && G.player.stamina>0){sp*=1.8;G.player.stamina-=40*dt}
- else G.player.stamina+=25*dt;
- G.player.stamina=Math.max(0,Math.min(100,G.player.stamina));
-
- if(G.keys.w) G.player.pos.add(f.clone().multiplyScalar(sp*dt));
- if(G.keys.s) G.player.pos.add(f.clone().multiplyScalar(-sp*dt));
- if(G.keys.a) G.player.pos.add(r.clone().multiplyScalar(-sp*dt));
- if(G.keys.d) G.player.pos.add(r.clone().multiplyScalar(sp*dt));
-
- if(G.keys[" "] && G.player.onGround){
-  G.player.velY=G.settings.jump;
-  G.player.onGround=false;
- }
- G.player.velY-=G.settings.gravity*dt;
- G.player.pos.y+=G.player.velY*dt;
- if(G.player.pos.y<1.7){G.player.pos.y=1.7;G.player.velY=0;G.player.onGround=true}
-
- if(G.shoot) fire();
-
- G.camera.position.copy(G.player.pos);
- G.camera.rotation.copy(G.player.rot);
- G.camera.fov+=( (G.ads?G.settings.adsFov:G.settings.fov)-G.camera.fov )*dt*8;
- G.camera.updateProjectionMatrix();
-
- G.bots.forEach(b=>{
-  let d=b.mesh.position.distanceTo(G.player.pos);
-  if(d<40){
-   let dir=new THREE.Vector3().subVectors(G.player.pos,b.mesh.position).normalize();
-   b.mesh.position.add(dir.multiplyScalar(dt*2));
-  }
- });
-
- health.style.width=G.player.health+"%";
- armor.style.width=(G.player.armor/150*100)+"%";
- stamina.style.width=G.player.stamina+"%";
- info.innerHTML=`💰 $${G.player.money} | 🎯 ${G.player.kills} | 🛡️ ${G.player.plates}`;
-
- G.renderer.render(G.scene,G.camera);
-}
-loop();
-
-/* ================= UI ================= */
-function notify(t){
- let n=document.createElement("div");
- n.className="notification";
- n.textContent=t;
- document.body.appendChild(n);
- setTimeout(()=>n.remove(),2000);
-}
-</script>
+<!-- Tu lógica JS -->
+<script src="game.js"></script>
 </body>
 </html>
